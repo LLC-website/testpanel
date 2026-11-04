@@ -136,3 +136,12 @@ textarea{resize:vertical;min-height:72px}
 #toast.err{background:var(--bad);color:#fff}
 .btn:disabled{opacity:.5;cursor:default}
 .loading{padding:40px 0;text-align:center;color:var(--muted)}
+/* polls */
+.poll{display:flex;flex-direction:column;gap:8px;max-width:520px}
+.popt{position:relative;border:1px solid var(--line);border-radius:10px;padding:10px 14px;overflow:hidden;display:flex;justify-content:space-between;gap:10px;background:var(--surface);font:inherit;color:inherit;text-align:left;width:100%}
+button.popt{cursor:pointer}
+button.popt:hover{border-color:var(--accent)}
+.popt .bar{position:absolute;inset:0 auto 0 0;background:var(--soft)}
+.popt>span{position:relative}
+.popt.mine{border-color:var(--accent)}
+.pollopts{display:flex;flex-direction:column;gap:8px}

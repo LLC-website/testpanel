@@ -16,6 +16,7 @@ const low = s => String(s || '').trim().toLowerCase();
 const S = {
   user: null, admin: false, member: false, loading: true, busy: false,
   profile: null, invites: [], profiles: [], products: [], samples: [], updates: [], posts: [], urls: {},
+  votes: [], counts: [], pollOn: false, pollN: 2, draft: { text: '', opts: [] },
   view: 'chats', prod: null, tester: null, ttab: 'profiel', edit: false, step: 1, miss: false,
   open: null, rm: null, flash: false, snap: null, editProd: false,
   login: { state: null, email: '', err: '' }
@@ -108,8 +109,10 @@ async function load() {
   ]);
   const bad = all.find(r => r.error); if (bad) fail(bad.error, 'Laden');
   [S.products, S.samples, S.updates, S.posts, S.invites, S.profiles] = all.map(r => r.data || []);
+  const [pv, pc] = await Promise.all([sb.from('poll_votes').select('*'), sb.rpc('poll_counts')]);
+  S.votes = pv.data || []; S.counts = pc.data || [];
   S.profiles.forEach(norm);
-  S.profile = S.profiles.find(p => p.id === S.user.id) || null;
+  S.profile =S.profiles.find(p => p.id === S.user.id) || null;
   if (!S.admin && !S.profile) {
     const { data, error } = await sb.from('profiles').insert({ id: S.user.id, email: S.user.email }).select().single();
     if (error) fail(error, 'Profiel aanmaken'); else { S.profile = norm(data); S.profiles = [S.profile]; }
@@ -245,13 +248,27 @@ function vDag() {
 }
 
 /* community */
+function vPoll(p) {
+  if (!Array.isArray(p.poll) || !p.poll.length) return '';
+  const mine = S.votes.find(v => v.post === p.id && v.tester === S.user.id);
+  const counts = p.poll.map((_, i) => Number(S.counts.find(c => c.post === p.id && c.choice === i)?.n || 0));
+  const total = counts.reduce((a, b) => a + b, 0);
+  if (!S.admin && !mine) return `<div class="poll" role="group" aria-label="Poll">${p.poll.map((o, i) =>
+    `<button type="button" class="popt" data-a="vote" data-v="${p.id}|${i}" ${dis()}><span>${esc(o)}</span></button>`).join('')}<p class="note">Je kunt één keer stemmen.</p></div>`;
+  return `<div class="poll">${p.poll.map((o, i) => { const pct = total ? Math.round(counts[i] / total * 100) : 0; return `<div class="popt ${mine?.choice === i ? 'mine' : ''}"><i class="bar" style="width:${pct}%"></i><span>${esc(o)}${mine?.choice === i ? ' · <b>jouw stem</b>' : ''}</span><span>${pct}%</span></div>`; }).join('')}
+    <p class="note">${total} ${total === 1 ? 'stem' : 'stemmen'}</p></div>`;
+}
 function vCommunity() {
+  const d = S.draft;
+  const opts = Array.from({ length: S.pollN }, (_, i) => `<input id="pollOpt-${i}" data-draft="opt" data-i="${i}" value="${esc(d.opts[i] || '')}" placeholder="Antwoord ${i + 1}" aria-label="Antwoord ${i + 1}">`).join('');
   const form = S.admin ? `<form data-f="post" class="panel"><h2>Nieuwe community-update</h2>
-    <textarea id="postText" required placeholder="Wat wil je met je testers delen?" aria-label="Community-update"></textarea>
+    <textarea id="postText" data-draft="text" required placeholder="${S.pollOn ? 'Wat is je vraag? Bijvoorbeeld: welke kleur wil je als volgende?' : 'Wat wil je met je testers delen?'}" aria-label="Community-update">${esc(d.text)}</textarea>
+    <label class="switch"><input type="checkbox" id="pollOn" ${S.pollOn ? 'checked' : ''}>Maak er een poll van</label>
+    ${S.pollOn ? `<div class="pollopts">${opts}${S.pollN < 6 ? '<div><button type="button" class="btn link" data-a="addopt">+ Antwoord toevoegen</button></div>' : ''}</div>` : ''}
     <div class="row"><label class="filebtn">Foto toevoegen<input id="postPhoto" type="file" accept="image/*" hidden></label><span id="postFile" class="meta"></span><span class="grow"></span><button class="btn" ${dis()}>${S.busy ? 'Bezig…' : 'Plaats update'}</button></div>
-    <p class="note">Alle testers zien dit bericht.</p></form>` : '';
+    <p class="note">Alle testers zien dit bericht${S.pollOn ? ' en kunnen één keer stemmen' : ''}.</p></form>` : '';
   return form + `<div class="panel"><h2>Community</h2><div>${S.posts.map(p => `<article class="upd"><div class="mhead"><b>${ADMIN}</b><span class="meta">${fd(p.created_at)}</span><span class="grow"></span>${S.admin ? `<button type="button" class="btn link" data-a="delpost" data-v="${p.id}">Verwijderen</button>` : ''}</div>
-    <p class="utext">${esc(p.text)}</p>${img(p.photo, 'Foto bij community-update')}</article>`).join('') || '<p class="note">Nog geen updates.</p>'}</div></div>`;
+    <p class="utext">${esc(p.text)}</p>${img(p.photo, 'Foto bij community-update')}${vPoll(p)}</article>`).join('') || '<p class="note">Nog geen updates.</p>'}</div></div>`;
 }
 
 /* samples tester */
@@ -400,6 +417,15 @@ document.addEventListener('click', e => {
       S.tester = null; S.rm = null; await load(); toast('Toegang ingetrokken');
     });
     case 'resend': return run('Inloglink sturen', async () => { const err = await sendLink(S.tester); if (err) throw err; toast('Inloglink verstuurd'); });
+    case 'addopt': S.pollN = Math.min(6, S.pollN + 1); break;
+    case 'vote': {
+      const [post, choice] = v.split('|');
+      return run('Stemmen', async () => {
+        const { error } = await sb.from('poll_votes').insert({ post, choice: +choice });
+        if (error && error.code !== '23505') throw error;
+        await load(); toast(error ? 'Je had al gestemd' : 'Bedankt voor je stem!');
+      });
+    }
     case 'recv': return run('Opslaan', async () => { const { error } = await sb.rpc('mark_received', { sid: v }); if (error) throw error; await load(); });
     case 'recvAdmin': return run('Opslaan', async () => { const { error } = await sb.from('samples').update({ received: today() }).eq('id', v); if (error) throw error; await load(); });
     case 'delpost': return run('Verwijderen', async () => { const { error } = await sb.from('posts').delete().eq('id', v); if (error) throw error; await load(); toast('Verwijderd'); });
@@ -421,6 +447,7 @@ document.addEventListener('change', e => {
   if (el.id === 'upProd') { S.prod = el.value; S.flash = false; render(); return; }
   if (el.id === 'upPhoto') { $('upFile').textContent = el.files[0]?.name || ''; return; }
   if (el.id === 'postPhoto') { $('postFile').textContent = el.files[0]?.name || ''; return; }
+  if (el.id === 'pollOn') { S.pollOn = el.checked; render(); return; }
   if (el.dataset.notif) {
     const k = el.dataset.notif; S.profile.notif = { ...S.profile.notif, [k]: el.checked };
     sb.from('profiles').update({ notif: S.profile.notif }).eq('id', S.profile.id).then(({ error }) => error ? fail(error, 'Opslaan') : toast('Opgeslagen'));
@@ -470,10 +497,13 @@ document.addEventListener('submit', e => {
   }
   if (f === 'post') {
     const text = cap($('postText').value), file = $('postPhoto').files[0];
+    const poll = S.pollOn ? [...document.querySelectorAll('[data-draft="opt"]')].map(x => x.value.trim()).filter(Boolean) : null;
+    if (poll && poll.length < 2) { toast('Vul minstens twee antwoorden in voor je poll.', true); return; }
     return run('Plaatsen', async () => {
       const photo = await uploadPhoto(file, 'community');
-      const { error } = await sb.from('posts').insert({ text, photo }); if (error) throw error;
-      await load(); toast('Community-update geplaatst');
+      const { error } = await sb.from('posts').insert(poll ? { text, photo, poll } : { text, photo }); if (error) throw error;
+      S.draft = { text: '', opts: [] }; S.pollOn = false; S.pollN = 2;
+      await load(); toast(poll ? 'Poll geplaatst' : 'Community-update geplaatst');
     });
   }
   if (f === 'upd') {
@@ -487,4 +517,9 @@ document.addEventListener('submit', e => {
       await load(); S.flash = true;
     });
   }
+});
+document.addEventListener('input', e => {
+  const el = e.target;
+  if (el.dataset.draft === 'text') S.draft.text = el.value;
+  if (el.dataset.draft === 'opt') S.draft.opts[+el.dataset.i] = el.value;
 });
